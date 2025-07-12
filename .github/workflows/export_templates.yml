@@ -1,0 +1,97 @@
+# .github/workflows/export_templates.yml
+name: CI – Build All Export Templates
+
+on:
+  push:
+    branches:
+      - '4.*'            # trigger on any 4.x branch
+  workflow_dispatch:     # allow manual rerun
+
+jobs:
+  # 1) Build export templates per‐platform in parallel
+  build-templates:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            deps: |
+              sudo apt-get update
+              sudo apt-get install -y scons pkg-config libx11-dev libxcursor-dev \
+                libxrandr-dev libxi-dev libxinerama-dev libgl1-mesa-dev libasound2-dev
+          - os: windows-latest
+            platform: windows
+            deps: choco install python scons
+          - os: macos-latest
+            platform: macos
+            deps: brew update && brew install scons
+          - os: ubuntu-latest
+            platform: web
+            deps: |
+              # install Emscripten SDK (must match Godot’s emscripten version)
+              git clone https://github.com/emscripten-core/emsdk.git
+              cd emsdk && ./emsdk install 3.1.18 && ./emsdk activate 3.1.18
+              source emsdk/emsdk_env.sh
+          - os: ubuntu-latest
+            platform: android
+            deps: |
+              sudo apt-get update
+              sudo apt-get install -y openjdk-11-jdk unzip wget
+              # download Android NDK (r25b for example)
+              wget https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
+              unzip android-ndk-r25b-linux.zip -d $HOME/
+    outputs:
+      artifact: export-${{ matrix.platform }}.zip
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up dependencies for ${{ matrix.platform }}
+        run: |
+          echo "=== Installing deps for ${{ matrix.platform }} on $RUNNER_OS ==="
+          ${{ matrix.deps }}
+      - name: Build export templates for ${{ matrix.platform }}
+        run: |
+          scons \
+            platform=${{ matrix.platform }} \
+            target=release_debug \
+            tools=no \
+            module_webm_enabled=no \
+            template=yes \
+            -j$(nproc || echo 2)
+      - name: Zip up ${{ matrix.platform }} templates
+        run: |
+          cd bin
+          zip -r ../export-${{ matrix.platform }}.zip *
+      - name: Upload ${{ matrix.platform }} artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: export-${{ matrix.platform }}
+          path: export-${{ matrix.platform }}.zip
+
+  # 2) Combine all per‐platform zips + version.txt into one TPZ
+  package-tpz:
+    needs: build-templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3          # to read version.py
+      - name: Download all platform zips
+        uses: actions/download-artifact@v3
+        with:
+          path: ./all_zips
+      - name: Generate version.txt
+        run: |
+          V=$(python3 -c "import sys; sys.path.append('.'); from modules.version import git_version; print(git_version())")
+          echo "$V" > version.txt
+      - name: Assemble TPZ
+        run: |
+          mkdir templates
+          mv all_zips/*.zip templates/
+          mv version.txt templates/
+          cd templates
+          zip -r ../Godot_export_templates_${V}.tpz ./*
+      - name: Upload TPZ
+        uses: actions/upload-artifact@v3
+        with:
+          name: godot-export-templates-tpz
+          path: Godot_export_templates_*.tpz
