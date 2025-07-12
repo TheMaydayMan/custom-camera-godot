@@ -1,93 +1,251 @@
-# .github/workflows/export_templates.yml
-name: CI – Build All Export Templates
+name: Build Godot Export Templates
 
-on: [push, pull_request, merge_group, workflow_dispatch]
+# Workflow is manually triggered via workflow_dispatch (allows manual runs on any branch):contentReference[oaicite:0]{index=0}
+on:
+  workflow_dispatch:
 
 jobs:
-  # 1) Build export templates per‐platform in parallel
-  build-templates:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux
-            deps: |
-              sudo apt-get update
-              sudo apt-get install -y scons pkg-config libx11-dev libxcursor-dev \
-                libxrandr-dev libxi-dev libxinerama-dev libgl1-mesa-dev libasound2-dev
-          - os: windows-latest
-            platform: windows
-            deps: choco install python scons
-          - os: macos-latest
-            platform: macos
-            deps: brew update && brew install scons
-          - os: ubuntu-latest
-            platform: web
-            deps: |
-              # install Emscripten SDK (must match Godot’s emscripten version)
-              git clone https://github.com/emscripten-core/emsdk.git
-              cd emsdk && ./emsdk install 3.1.18 && ./emsdk activate 3.1.18
-              source emsdk/emsdk_env.sh
-          - os: ubuntu-latest
-            platform: android
-            deps: |
-              sudo apt-get update
-              sudo apt-get install -y openjdk-11-jdk unzip wget
-              # download Android NDK (r25b for example)
-              wget https://dl.google.com/android/repository/android-ndk-r25b-linux.zip
-              unzip android-ndk-r25b-linux.zip -d $HOME/
-    outputs:
-      artifact: export-${{ matrix.platform }}.zip
-
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up dependencies for ${{ matrix.platform }}
-        run: |
-          echo "=== Installing deps for ${{ matrix.platform }} on $RUNNER_OS ==="
-          ${{ matrix.deps }}
-      - name: Build export templates for ${{ matrix.platform }}
-        run: |
-          scons \
-            platform=${{ matrix.platform }} \
-            target=release_debug \
-            tools=no \
-            module_webm_enabled=no \
-            template=yes \
-            -j$(nproc || echo 2)
-      - name: Zip up ${{ matrix.platform }} templates
-        run: |
-          cd bin
-          zip -r ../export-${{ matrix.platform }}.zip *
-      - name: Upload ${{ matrix.platform }} artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: export-${{ matrix.platform }}
-          path: export-${{ matrix.platform }}.zip
-
-  # 2) Combine all per‐platform zips + version.txt into one TPZ
-  package-tpz:
-    needs: build-templates
+  build-linux:
     runs-on: ubuntu-latest
+    name: Build Linux Export Templates
     steps:
-      - uses: actions/checkout@v3          # to read version.py
-      - name: Download all platform zips
+      - name: Checkout Godot source
+        uses: actions/checkout@v3
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-pip build-essential pkg-config \
+            libx11-dev libxcursor-dev libxinerama-dev \
+            libgl1-mesa-dev libglu1-mesa-dev \
+            libasound2-dev libpulse-dev libudev-dev \
+            libxi-dev libxrandr-dev libwayland-dev
+          python3 -m pip install scons
+        # Install Linux build libraries (X11, audio, etc.):contentReference[oaicite:1]{index=1}
+
+      - name: Build Linux templates
+        run: |
+          scons platform=linuxbsd target=template_release -j$(nproc)
+          scons platform=linuxbsd target=template_debug -j$(nproc)
+        # Build Linux release & debug export templates (32-bit & 64-bit):contentReference[oaicite:2]{index=2}
+
+      - name: Package Linux templates
+        run: |
+          mkdir export
+          cp bin/* export/
+        # Collect built Linux templates
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: export-templates-linux
+          path: export
+
+  build-windows:
+    runs-on: windows-latest
+    name: Build Windows Export Templates
+    steps:
+      - name: Checkout Godot source
+        uses: actions/checkout@v3
+
+      - name: Install SCons
+        run: pip install scons
+
+      - name: Build Windows templates
+        run: |
+          scons platform=windows target=template_release arch=x86_64
+          scons platform=windows target=template_debug arch=x86_64
+        # Build Windows release & debug export templates:contentReference[oaicite:3]{index=3}
+
+      - name: Package Windows templates
+        run: |
+          mkdir export
+          copy "bin\\*.exe" export\
+        shell: cmd
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: export-templates-windows
+          path: export
+
+  build-macos:
+    runs-on: macos-latest
+    name: Build macOS Export Templates
+    steps:
+      - name: Checkout Godot source
+        uses: actions/checkout@v3
+
+      - name: Install SCons
+        run: brew install scons
+
+      - name: Build macOS templates
+        run: |
+          scons platform=macos target=template_release arch=arm64 generate_bundle=yes
+          scons platform=macos target=template_release arch=x86_64 generate_bundle=yes
+          scons platform=macos target=template_debug arch=arm64 generate_bundle=yes
+          scons platform=macos target=template_debug arch=x86_64 generate_bundle=yes
+        # Build macOS (ARM & Intel) release & debug export templates:contentReference[oaicite:4]{index=4}
+
+      - name: Package macOS templates
+        run: |
+          mkdir export
+          cp -R bin/* export/
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: export-templates-macos
+          path: export
+
+  build-html5:
+    runs-on: ubuntu-latest
+    name: Build HTML5 (Web) Export Templates
+    steps:
+      - name: Checkout Godot source
+        uses: actions/checkout@v3
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Build Web templates
+        run: |
+          scons platform=web target=template_release -j$(nproc)
+          scons platform=web target=template_debug -j$(nproc)
+        # Build HTML5/Web export templates:contentReference[oaicite:5]{index=5}
+
+      - name: Package Web templates
+        run: |
+          mkdir export
+          cp bin/* export/
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: export-templates-web
+          path: export
+
+  build-android:
+    runs-on: ubuntu-latest
+    name: Build Android Export Templates
+    steps:
+      - name: Checkout Godot source
+        uses: actions/checkout@v3
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 'latest'
+          accept-android-sdk-licenses: true
+
+      - name: Install SCons
+        run: python3 -m pip install scons
+
+      - name: Build Android templates
+        run: |
+          scons platform=android target=template_release arch=arm32
+          scons platform=android target=template_release arch=arm64 generate_apk=yes
+          scons platform=android target=template_debug arch=arm32
+          scons platform=android target=template_debug arch=arm64 generate_apk=yes
+        # Build Android release & debug templates (ARM32 & ARM64):contentReference[oaicite:6]{index=6}
+
+      - name: Package Android templates
+        run: |
+          mkdir export
+          cp bin/android_*.apk export/
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: export-templates-android
+          path: export
+
+  build-ios:
+    runs-on: macos-latest
+    name: Build iOS Export Templates
+    steps:
+      - name: Checkout Godot source
+        uses: actions/checkout@v3
+
+      - name: Install SCons
+        run: brew install scons
+
+      - name: Build iOS templates
+        run: |
+          scons platform=ios target=template_release generate_bundle=yes
+          scons platform=ios target=template_debug generate_bundle=yes
+        # Build iOS release & debug export templates:contentReference[oaicite:7]{index=7}
+
+      - name: Package iOS templates
+        run: |
+          mkdir export
+          cp -R bin/* export/
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: export-templates-ios
+          path: export
+
+  package:
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-windows
+      - build-macos
+      - build-html5
+      - build-android
+      - build-ios
+    name: Package All Export Templates
+    steps:
+      - name: Download Linux templates
         uses: actions/download-artifact@v3
         with:
-          path: ./all_zips
-      - name: Generate version.txt
+          name: export-templates-linux
+          path: combined
+
+      - name: Download Windows templates
+        uses: actions/download-artifact@v3
+        with:
+          name: export-templates-windows
+          path: combined
+
+      - name: Download macOS templates
+        uses: actions/download-artifact@v3
+        with:
+          name: export-templates-macos
+          path: combined
+
+      - name: Download Web templates
+        uses: actions/download-artifact@v3
+        with:
+          name: export-templates-web
+          path: combined
+
+      - name: Download Android templates
+        uses: actions/download-artifact@v3
+        with:
+          name: export-templates-android
+          path: combined
+
+      - name: Download iOS templates
+        uses: actions/download-artifact@v3
+        with:
+          name: export-templates-ios
+          path: combined
+
+      - name: Combine and zip all templates
         run: |
-          V=$(python3 -c "import sys; sys.path.append('.'); from modules.version import git_version; print(git_version())")
-          echo "$V" > version.txt
-      - name: Assemble TPZ
-        run: |
-          mkdir templates
-          mv all_zips/*.zip templates/
-          mv version.txt templates/
-          cd templates
-          zip -r ../Godot_export_templates_${V}.tpz ./*
-      - name: Upload TPZ
+          mkdir output
+          cp -R combined/* output/
+          zip -r export_templates.tzp output
+        # Package all built export templates into a single TPZ (zip) file:contentReference[oaicite:8]{index=8}
+
+      - name: Upload TPZ artifact
         uses: actions/upload-artifact@v3
         with:
-          name: godot-export-templates-tpz
-          path: Godot_export_templates_*.tpz
+          name: export_templates_tzp
+          path: export_templates.tzp
