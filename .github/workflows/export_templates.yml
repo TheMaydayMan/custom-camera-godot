@@ -1,11 +1,7 @@
 # .github/workflows/export_templates.yml
 name: CI – Build All Export Templates
 
-on:
-  push:
-    branches:
-      - '4.*'            # trigger on any 4.x branch
-  workflow_dispatch:     # allow manual rerun
+on: [push, pull_request, merge_group, workflow_dispatch]
 
 jobs:
   # 1) Build export templates per‐platform in parallel
